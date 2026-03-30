@@ -1,0 +1,742 @@
+openapi: 3.0.0
+
+info:
+  title: Auth Service API
+  version: 1.0.0
+  description: |
+    Manages all system users, JWT authentication, and station records.
+
+    **Base URL:** `http://localhost:3001`
+
+    **How to authenticate:**
+    1. Call `POST /auth/login` to get an `accessToken`
+    2. Click the **Authorize** button at the top of this page
+    3. Enter: `Bearer <your_accessToken>`
+    4. All protected endpoints will now include your token automatically
+
+servers:
+  - url: http://localhost:3001
+    description: Local development
+
+tags:
+  - name: Authentication
+    description: Login and token management
+  - name: Users
+    description: User account management (admin only)
+  - name: Stations
+    description: Hospital, police, and fire station management
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: "Enter your access token — obtained from POST /auth/login"
+
+  schemas:
+
+    LoginRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email:
+          type: string
+          example: admin@ercp.gh
+        password:
+          type: string
+          example: Admin1234!
+
+    LoginResponse:
+      type: object
+      properties:
+        accessToken:
+          type: string
+          description: JWT access token. Valid for 1 hour. Use this in the Authorization header.
+          example: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+        refreshToken:
+          type: string
+          description: JWT refresh token. Valid for 7 days. Use to get a new access token.
+          example: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+        expiresIn:
+          type: integer
+          description: Seconds until the access token expires
+          example: 3600
+        user:
+          type: object
+          properties:
+            userId:
+              type: string
+              example: a1b2c3d4-0000-0000-0000-000000000001
+            name:
+              type: string
+              example: Kofi Mensah
+            email:
+              type: string
+              example: admin@ercp.gh
+            role:
+              type: string
+              enum: [system_admin, hospital_admin, police_admin, fire_admin, ambulance_driver]
+              example: system_admin
+
+    RefreshRequest:
+      type: object
+      required: [refreshToken]
+      properties:
+        refreshToken:
+          type: string
+          example: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+
+    RefreshResponse:
+      type: object
+      properties:
+        accessToken:
+          type: string
+        refreshToken:
+          type: string
+        expiresIn:
+          type: integer
+          example: 3600
+
+    UserProfile:
+      type: object
+      properties:
+        user_id:
+          type: string
+          example: a1b2c3d4-0000-0000-0000-000000000001
+        name:
+          type: string
+          example: Kofi Mensah
+        email:
+          type: string
+          example: admin@ercp.gh
+        role:
+          type: string
+          enum: [system_admin, hospital_admin, police_admin, fire_admin, ambulance_driver]
+        station_id:
+          type: string
+          nullable: true
+          example: HOSP-001
+        is_active:
+          type: boolean
+          example: true
+        last_login:
+          type: string
+          format: date-time
+          example: "2026-03-27T10:00:00.000Z"
+        created_at:
+          type: string
+          format: date-time
+
+    RegisterRequest:
+      type: object
+      required: [name, email, password, role]
+      properties:
+        name:
+          type: string
+          example: Ama Owusu
+        email:
+          type: string
+          example: ama@korlebu.gh
+        password:
+          type: string
+          description: Plain text password — hashed with bcrypt before storage
+          example: Secure1234!
+        role:
+          type: string
+          enum: [system_admin, hospital_admin, police_admin, fire_admin, ambulance_driver]
+          example: hospital_admin
+        station_id:
+          type: string
+          description: Required for hospital_admin, police_admin, fire_admin, ambulance_driver. system_admin can assign any station.
+          example: HOSP-001
+
+    RegisterResponse:
+      type: object
+      properties:
+        userId:
+          type: string
+          example: b2c3d4e5-0000-0000-0000-000000000002
+        name:
+          type: string
+          example: Ama Owusu
+        email:
+          type: string
+          example: ama@korlebu.gh
+        role:
+          type: string
+          example: hospital_admin
+        station_id:
+          type: string
+          example: HOSP-001
+        createdAt:
+          type: string
+          format: date-time
+
+    EditUserRequest:
+      type: object
+      description: Provide at least one field to update. Role changes must use PUT /auth/users/:id/role instead.
+      properties:
+        name:
+          type: string
+          example: Ama Owusu-Mensah
+        email:
+          type: string
+          example: ama.new@korlebu.gh
+        station_id:
+          type: string
+          example: HOSP-002
+
+    UpdateRoleRequest:
+      type: object
+      required: [role]
+      properties:
+        role:
+          type: string
+          enum: [system_admin, hospital_admin, police_admin, fire_admin, ambulance_driver]
+          example: police_admin
+
+    Station:
+      type: object
+      properties:
+        station_id:
+          type: string
+          example: HOSP-001
+        name:
+          type: string
+          example: Korle Bu Teaching Hospital
+        type:
+          type: string
+          enum: [hospital, police, fire]
+        address:
+          type: string
+          example: Korle Bu, Accra
+        latitude:
+          type: number
+          format: float
+          example: 5.5467
+        longitude:
+          type: number
+          format: float
+          example: -0.2317
+        total_capacity:
+          type: integer
+          description: Hospitals only
+          example: 200
+        available_capacity:
+          type: integer
+          description: Hospitals only
+          example: 45
+        created_at:
+          type: string
+          format: date-time
+        users:
+          type: array
+          description: Users assigned to this station
+          items:
+            $ref: '#/components/schemas/UserProfile'
+
+    CreateStationRequest:
+      type: object
+      required: [station_id, name]
+      properties:
+        station_id:
+          type: string
+          description: Unique ID you assign. Use a meaningful prefix (HOSP-, POL-, FIRE-)
+          example: HOSP-001
+        name:
+          type: string
+          example: Korle Bu Teaching Hospital
+        type:
+          type: string
+          enum: [hospital, police, fire]
+          description: Required when caller is system_admin. Inferred from role for other admins.
+          example: hospital
+        address:
+          type: string
+          example: Korle Bu, Accra
+        latitude:
+          type: number
+          format: float
+          example: 5.5467
+        longitude:
+          type: number
+          format: float
+          example: -0.2317
+        total_capacity:
+          type: integer
+          description: Required for hospital type. Sets initial available_capacity to the same value.
+          example: 200
+
+    UpdateCapacityRequest:
+      type: object
+      description: Provide at least one of total_capacity or available_capacity
+      properties:
+        total_capacity:
+          type: integer
+          example: 200
+        available_capacity:
+          type: integer
+          description: Current number of available beds
+          example: 45
+
+    ErrorResponse:
+      type: object
+      properties:
+        message:
+          type: string
+          example: Unauthorized
+
+paths:
+
+  /health:
+    get:
+      tags: [Authentication]
+      summary: Health check
+      description: Returns the service status. No authentication required.
+      responses:
+        "200":
+          description: Service is running
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ok
+                  service:
+                    type: string
+                    example: auth-service
+                  timestamp:
+                    type: string
+                    format: date-time
+
+  /auth/login:
+    post:
+      tags: [Authentication]
+      summary: Log in
+      description: |
+        Authenticate with email and password.
+        Returns an access token (1 hour) and a refresh token (7 days).
+        The access token must be included in the `Authorization` header of all protected requests.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+      responses:
+        "200":
+          description: Login successful
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoginResponse'
+        "400":
+          description: Email or password missing
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "401":
+          description: Invalid email or password
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /auth/refresh-token:
+    post:
+      tags: [Authentication]
+      summary: Refresh access token
+      description: |
+        Exchange a valid refresh token for a new access token and refresh token.
+        Use this when the access token has expired (after 1 hour).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RefreshRequest'
+      responses:
+        "200":
+          description: New tokens issued
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RefreshResponse'
+        "400":
+          description: Refresh token missing from request body
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "401":
+          description: Refresh token is invalid or expired
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /auth/profile:
+    get:
+      tags: [Authentication]
+      summary: Get my profile
+      description: Returns the full profile of the currently logged-in user (excluding password hash).
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: User profile
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserProfile'
+        "401":
+          description: No token provided or token is invalid
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "404":
+          description: User not found or deactivated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /auth/register:
+    post:
+      tags: [Users]
+      summary: Register a new user
+      description: |
+        Create a new user account. Requires an admin role.
+
+        **Role restrictions:**
+        - `system_admin` — can create any role, assign any station
+        - `hospital_admin` — can only create `hospital_admin` or `ambulance_driver`. New user is automatically placed in the caller's station.
+        - `police_admin` — can only create `police_admin`. Same station as caller.
+        - `fire_admin` — can only create `fire_admin`. Same station as caller.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterRequest'
+      responses:
+        "201":
+          description: User created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RegisterResponse'
+        "400":
+          description: Required fields missing
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "401":
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "403":
+          description: Not authorised to create this role
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "409":
+          description: Email already registered
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /auth/users:
+    get:
+      tags: [Users]
+      summary: List all users
+      description: |
+        Returns all user accounts (excluding password hashes).
+
+        **Role restrictions:**
+        - `system_admin` — sees all users in the system
+        - `hospital_admin` — sees only users in their own station
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: List of users
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/UserProfile'
+        "401":
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "403":
+          description: Your role cannot access this endpoint
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /auth/users/{id}:
+    put:
+      tags: [Users]
+      summary: Edit a user
+      description: |
+        Update a user's name, email, or station_id.
+        To change a role use `PUT /auth/users/{id}/role` instead.
+
+        Non-system admins can only edit users within their own station.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: The user_id (UUID) of the user to edit
+          schema:
+            type: string
+            example: b2c3d4e5-0000-0000-0000-000000000002
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/EditUserRequest'
+      responses:
+        "200":
+          description: User updated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: User updated
+                  user:
+                    $ref: '#/components/schemas/UserProfile'
+        "400":
+          description: No valid fields provided
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "403":
+          description: Cannot edit users outside your station
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "404":
+          description: User not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "409":
+          description: New email is already in use by another account
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /auth/users/{id}/role:
+    put:
+      tags: [Users]
+      summary: Update a user's role
+      description: Change the role assigned to a user. Only system_admin can call this.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: The user_id (UUID) of the user
+          schema:
+            type: string
+            example: b2c3d4e5-0000-0000-0000-000000000002
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateRoleRequest'
+      responses:
+        "200":
+          description: Role updated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: Role updated
+                  userId:
+                    type: string
+                  role:
+                    type: string
+                    example: police_admin
+        "403":
+          description: Only system_admin can change roles
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "404":
+          description: User not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /auth/stations:
+    post:
+      tags: [Stations]
+      summary: Create a station
+      description: |
+        Register a new hospital, police station, or fire station.
+
+        The `type` field is required when called by `system_admin`.
+        For other admin roles the type is inferred automatically:
+        - `hospital_admin` → hospital
+        - `police_admin` → police
+        - `fire_admin` → fire
+
+        Only hospital stations use the `total_capacity` field.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateStationRequest'
+      responses:
+        "201":
+          description: Station created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Station'
+        "400":
+          description: station_id or name missing
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "409":
+          description: Station ID already exists
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+    get:
+      tags: [Stations]
+      summary: List all stations
+      description: |
+        Returns all stations with their assigned users.
+
+        Results are filtered by the caller's role:
+        - `system_admin` — sees all stations. Add `?type=hospital` / `?type=police` / `?type=fire` to filter.
+        - `hospital_admin` — sees hospital stations only
+        - `police_admin` — sees police stations only
+        - `fire_admin` — sees fire stations only
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: type
+          in: query
+          required: false
+          description: Filter by station type (system_admin only)
+          schema:
+            type: string
+            enum: [hospital, police, fire]
+      responses:
+        "200":
+          description: List of stations
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Station'
+        "401":
+          description: Not authenticated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /auth/stations/{id}/capacity:
+    put:
+      tags: [Stations]
+      summary: Update hospital bed capacity
+      description: |
+        Update the total or available bed count for a hospital station.
+        Only works on stations of type `hospital`.
+        Can be called by `system_admin` or `hospital_admin`.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: The station_id of the hospital
+          schema:
+            type: string
+            example: HOSP-001
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateCapacityRequest'
+      responses:
+        "200":
+          description: Capacity updated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: Capacity updated
+                  station_id:
+                    type: string
+                    example: HOSP-001
+                  total_capacity:
+                    type: integer
+                    example: 200
+                  available_capacity:
+                    type: integer
+                    example: 45
+        "400":
+          description: Station is not a hospital, or no capacity fields provided
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        "404":
+          description: Station not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
