@@ -2,7 +2,7 @@
 **Backend — Phase 2**
 
 > CPEN 421: Mobile and Web Software Design and Architecture
-> University of Ghana, School of Engineering Sciences — Group 23
+> University of Ghana, School of Engineering Sciences — Group 26
 
 A microservices-based backend for coordinating emergency services across Ghana.
 Four independent services communicate via REST APIs, RabbitMQ message queues, and WebSockets.
