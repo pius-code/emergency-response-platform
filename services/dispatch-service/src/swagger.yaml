@@ -1,0 +1,664 @@
+openapi: 3.0.0
+info:
+  title: Dispatch Service API
+  description: |
+    Manages emergency vehicles — registration, GPS location tracking, and status updates.
+
+    Vehicles are automatically dispatched (status set to `dispatched`) when incident-service
+    publishes an `incident.created` RabbitMQ event. Vehicles are freed back to `available`
+    when `incident.resolved` is received.
+
+    Real-time GPS updates are broadcast to all connected WebSocket clients via the
+    `location_update` event.
+  version: 1.0.0
+  contact:
+    name: Emergency Response Platform
+
+servers:
+  - url: http://localhost:3003
+    description: Local development (HTTP REST)
+  - url: ws://localhost:3003
+    description: WebSocket for real-time location updates
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: JWT token obtained from POST /auth/login
+
+  schemas:
+    Vehicle:
+      type: object
+      properties:
+        vehicle_id:
+          type: string
+          example: VEH-0042
+        station_id:
+          type: string
+          example: STATION-01
+        vehicle_type:
+          type: string
+          enum: [fire_truck, police_car, ambulance]
+          example: fire_truck
+        status:
+          type: string
+          enum: [available, dispatched, en_route, on_scene, returning]
+          example: available
+        latitude:
+          type: number
+          format: float
+          example: 5.6037
+        longitude:
+          type: number
+          format: float
+          example: -0.1870
+        speed_kmh:
+          type: number
+          format: float
+          nullable: true
+          example: 80.5
+        incident_id:
+          type: string
+          nullable: true
+          example: INC-2026-4821
+        last_updated:
+          type: string
+          format: date-time
+          example: "2026-03-27T10:20:00.000Z"
+
+    LocationSnapshot:
+      type: object
+      properties:
+        vehicle_id:
+          type: string
+          example: VEH-0042
+        latitude:
+          type: number
+          format: float
+          example: 5.6037
+        longitude:
+          type: number
+          format: float
+          example: -0.1870
+        speed_kmh:
+          type: number
+          format: float
+          nullable: true
+          example: 80.5
+        status:
+          type: string
+          example: en_route
+        last_updated:
+          type: string
+          format: date-time
+          example: "2026-03-27T10:20:00.000Z"
+
+    LocationHistoryEntry:
+      type: object
+      properties:
+        id:
+          type: integer
+          example: 1
+        vehicle_id:
+          type: string
+          example: VEH-0042
+        incident_id:
+          type: string
+          nullable: true
+          example: INC-2026-4821
+        latitude:
+          type: number
+          format: float
+          example: 5.6050
+        longitude:
+          type: number
+          format: float
+          example: -0.1860
+        speed_kmh:
+          type: number
+          format: float
+          nullable: true
+          example: 72.3
+        recorded_at:
+          type: string
+          format: date-time
+          example: "2026-03-27T10:18:00.000Z"
+
+    RegisterVehicleRequest:
+      type: object
+      required:
+        - vehicle_id
+        - station_id
+        - vehicle_type
+      properties:
+        vehicle_id:
+          type: string
+          example: VEH-0042
+        station_id:
+          type: string
+          example: STATION-01
+        vehicle_type:
+          type: string
+          enum: [fire_truck, police_car, ambulance]
+          example: fire_truck
+        latitude:
+          type: number
+          format: float
+          description: Initial GPS latitude (defaults to 5.6037 if omitted)
+          example: 5.6037
+        longitude:
+          type: number
+          format: float
+          description: Initial GPS longitude (defaults to -0.1870 if omitted)
+          example: -0.1870
+
+    UpdateLocationRequest:
+      type: object
+      required:
+        - latitude
+        - longitude
+      properties:
+        latitude:
+          type: number
+          format: float
+          example: 5.6050
+        longitude:
+          type: number
+          format: float
+          example: -0.1860
+        speed_kmh:
+          type: number
+          format: float
+          example: 80.5
+
+    UpdateStatusRequest:
+      type: object
+      required:
+        - status
+      properties:
+        status:
+          type: string
+          enum: [available, dispatched, en_route, on_scene, returning]
+          example: on_scene
+
+    ErrorResponse:
+      type: object
+      properties:
+        message:
+          type: string
+          example: Vehicle not found
+
+security:
+  - bearerAuth: []
+
+paths:
+  /vehicles/register:
+    post:
+      summary: Register a new vehicle
+      description: |
+        Registers a vehicle in the dispatch system with an initial GPS position.
+        Vehicle starts with status `available`.
+
+        **Roles allowed:** system_admin, hospital_admin, police_admin, fire_admin
+      tags: [Vehicles]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterVehicleRequest'
+            example:
+              vehicle_id: VEH-0042
+              station_id: STATION-01
+              vehicle_type: fire_truck
+              latitude: 5.6037
+              longitude: -0.1870
+      responses:
+        '201':
+          description: Vehicle registered successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Vehicle'
+        '400':
+          description: Missing required fields
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                message: vehicle_id, station_id and vehicle_type are required
+        '401':
+          description: Missing or invalid JWT
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Insufficient role
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Vehicle already registered
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                message: Vehicle already registered
+        '500':
+          description: Server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /vehicles:
+    get:
+      summary: List all vehicles
+      description: |
+        Returns all registered vehicles. Supports optional query filters.
+
+        This endpoint is also called internally by incident-service to find the nearest
+        available vehicle during auto-dispatch (filters `status=available&type=<vehicleType>`).
+
+        All authenticated roles can access this endpoint.
+      tags: [Vehicles]
+      parameters:
+        - name: status
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [available, dispatched, en_route, on_scene, returning]
+          description: Filter by vehicle status
+          example: available
+        - name: type
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [fire_truck, police_car, ambulance]
+          description: Filter by vehicle type
+          example: fire_truck
+      responses:
+        '200':
+          description: Array of vehicles
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Vehicle'
+        '401':
+          description: Missing or invalid JWT
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /vehicles/{id}:
+    get:
+      summary: Get a single vehicle by ID
+      description: Returns the full vehicle record. All authenticated roles can access this endpoint.
+      tags: [Vehicles]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: The vehicle_id (e.g. VEH-0042)
+          example: VEH-0042
+      responses:
+        '200':
+          description: The vehicle record
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Vehicle'
+        '401':
+          description: Missing or invalid JWT
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Vehicle not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                message: Vehicle not found
+        '500':
+          description: Server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /vehicles/{id}/location:
+    get:
+      summary: Get current vehicle location
+      description: Returns only the location-relevant fields for a vehicle (no full vehicle record).
+      tags: [Vehicles]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: The vehicle_id
+          example: VEH-0042
+      responses:
+        '200':
+          description: Current location snapshot
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LocationSnapshot'
+        '401':
+          description: Missing or invalid JWT
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Vehicle not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+    post:
+      summary: Push a GPS location update
+      description: |
+        Updates the vehicle's current GPS coordinates. Also:
+        1. Saves the location to the `location_history` table
+        2. Publishes a `location.updated` RabbitMQ event
+        3. Broadcasts a `location_update` WebSocket event to ALL connected clients
+
+        **WebSocket event payload:**
+        ```json
+        {
+          "vehicleId": "VEH-0042",
+          "incidentId": "INC-2026-4821",
+          "latitude": 5.6050,
+          "longitude": -0.1860,
+          "speed_kmh": 80.5,
+          "timestamp": "2026-03-27T10:20:00.000Z"
+        }
+        ```
+
+        All authenticated roles can push location updates.
+      tags: [Vehicles]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: The vehicle_id
+          example: VEH-0042
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateLocationRequest'
+            example:
+              latitude: 5.6050
+              longitude: -0.1860
+              speed_kmh: 80.5
+      responses:
+        '200':
+          description: Location updated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: Location updated
+                  vehicleId:
+                    type: string
+                    example: VEH-0042
+                  latitude:
+                    type: number
+                    example: 5.6050
+                  longitude:
+                    type: number
+                    example: -0.1860
+        '400':
+          description: Missing latitude or longitude
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                message: latitude and longitude are required
+        '401':
+          description: Missing or invalid JWT
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Vehicle not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /vehicles/{id}/status:
+    put:
+      summary: Manually update vehicle status
+      description: |
+        Overrides the vehicle's status. Useful for marking a vehicle as `on_scene`,
+        `returning`, etc.
+
+        Note: Status is also changed automatically via RabbitMQ events:
+        - `incident.created` → sets status to `dispatched`
+        - `incident.resolved` → sets status back to `available`
+
+        **Roles allowed:** system_admin, hospital_admin, police_admin, fire_admin
+      tags: [Vehicles]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: The vehicle_id
+          example: VEH-0042
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateStatusRequest'
+            example:
+              status: on_scene
+      responses:
+        '200':
+          description: Status updated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: Status updated
+                  vehicleId:
+                    type: string
+                    example: VEH-0042
+                  status:
+                    type: string
+                    example: on_scene
+        '400':
+          description: Invalid status value
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                message: "Status must be one of: available, dispatched, en_route, on_scene, returning"
+        '401':
+          description: Missing or invalid JWT
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Insufficient role
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Vehicle not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /vehicles/{id}/history:
+    get:
+      summary: Get location history for a vehicle
+      description: Returns the last 100 GPS location records for the vehicle, ordered newest first.
+      tags: [Vehicles]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: The vehicle_id
+          example: VEH-0042
+      responses:
+        '200':
+          description: Array of location history records (newest first, max 100)
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/LocationHistoryEntry'
+        '401':
+          description: Missing or invalid JWT
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /dispatch/{incidentId}/track:
+    get:
+      summary: Track the vehicle assigned to an incident
+      description: |
+        Returns the vehicle currently assigned to the given incident plus its full
+        location history for the incident journey (ordered oldest first).
+      tags: [Dispatch]
+      parameters:
+        - name: incidentId
+          in: path
+          required: true
+          schema:
+            type: string
+          description: The incident_id string (e.g. INC-2026-4821)
+          example: INC-2026-4821
+      responses:
+        '200':
+          description: Vehicle and its location history for the incident
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  vehicle:
+                    $ref: '#/components/schemas/Vehicle'
+                  locationHistory:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/LocationHistoryEntry'
+        '401':
+          description: Missing or invalid JWT
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: No vehicle assigned to this incident
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                message: No vehicle assigned to this incident
+        '500':
+          description: Server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /health:
+    get:
+      summary: Health check
+      description: Returns service status. No authentication required.
+      tags: [Health]
+      security: []
+      responses:
+        '200':
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ok
+                  service:
+                    type: string
+                    example: dispatch-service
+                  timestamp:
+                    type: string
+                    format: date-time
+                    example: "2026-03-27T10:00:00.000Z"

@@ -1,0 +1,563 @@
+openapi: 3.0.0
+info:
+  title: Incident Service API
+  description: |
+    Manages emergency incident creation, tracking, and unit assignment.
+    Auto-dispatches the nearest available vehicle using the Haversine formula.
+    All endpoints require a valid JWT Bearer token.
+  version: 1.0.0
+  contact:
+    name: Emergency Response Platform
+
+servers:
+  - url: http://localhost:3002
+    description: Local development
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: JWT token obtained from POST /auth/login
+
+  schemas:
+    Incident:
+      type: object
+      properties:
+        id:
+          type: integer
+          example: 1
+        incident_id:
+          type: string
+          example: INC-2026-4821
+        citizen_name:
+          type: string
+          example: Jane Doe
+        citizen_phone:
+          type: string
+          example: "555-0100"
+        incident_type:
+          type: string
+          example: fire
+        latitude:
+          type: number
+          format: float
+          example: 5.6037
+        longitude:
+          type: number
+          format: float
+          example: -0.1870
+        notes:
+          type: string
+          example: Fire spreading to second floor
+        status:
+          type: string
+          enum: [created, dispatched, in_progress, resolved]
+          example: dispatched
+        assigned_unit_id:
+          type: string
+          nullable: true
+          example: VEH-0042
+        assigned_unit_type:
+          type: string
+          nullable: true
+          enum: [fire, police, ambulance]
+          example: fire
+        created_by:
+          type: integer
+          example: 3
+        created_at:
+          type: string
+          format: date-time
+          example: "2026-03-27T10:15:00.000Z"
+        dispatched_at:
+          type: string
+          format: date-time
+          nullable: true
+          example: "2026-03-27T10:15:03.000Z"
+        resolved_at:
+          type: string
+          format: date-time
+          nullable: true
+          example: null
+
+    CreateIncidentRequest:
+      type: object
+      required:
+        - citizen_name
+        - incident_type
+        - latitude
+        - longitude
+      properties:
+        citizen_name:
+          type: string
+          example: Jane Doe
+        citizen_phone:
+          type: string
+          example: "555-0100"
+        incident_type:
+          type: string
+          description: |
+            Controls which vehicle type gets dispatched:
+            - fire, explosion, gas leak → fire_truck
+            - medical emergency, accident, injury → ambulance
+            - anything else → police_car
+          example: fire
+        latitude:
+          type: number
+          format: float
+          example: 5.6037
+        longitude:
+          type: number
+          format: float
+          example: -0.1870
+        notes:
+          type: string
+          example: Fire spreading to second floor
+
+    CreateIncidentResponse:
+      type: object
+      properties:
+        incidentId:
+          type: string
+          example: INC-2026-4821
+        status:
+          type: string
+          enum: [dispatched, created]
+          example: dispatched
+        assignedUnit:
+          type: object
+          nullable: true
+          description: Present only when a unit was found and dispatched
+          properties:
+            type:
+              type: string
+              example: fire
+            id:
+              type: string
+              example: VEH-0042
+            name:
+              type: string
+              example: STATION-01
+            distanceKm:
+              type: string
+              example: "2.45"
+        dispatchedAt:
+          type: string
+          format: date-time
+          nullable: true
+          example: "2026-03-27T10:15:03.000Z"
+        message:
+          type: string
+          description: Present only when no unit was available
+          example: Incident logged. No available unit found at this time.
+
+    UpdateStatusRequest:
+      type: object
+      required:
+        - status
+      properties:
+        status:
+          type: string
+          enum: [created, dispatched, in_progress, resolved]
+          example: in_progress
+
+    AssignUnitRequest:
+      type: object
+      required:
+        - assigned_unit_id
+        - assigned_unit_type
+      properties:
+        assigned_unit_id:
+          type: string
+          example: VEH-0042
+        assigned_unit_type:
+          type: string
+          enum: [fire, police, ambulance]
+          example: fire
+
+    ErrorResponse:
+      type: object
+      properties:
+        message:
+          type: string
+          example: Unauthorized
+
+security:
+  - bearerAuth: []
+
+paths:
+  /incidents:
+    post:
+      summary: Create a new incident
+      description: |
+        Creates an incident and automatically dispatches the nearest available vehicle.
+        Uses the Haversine formula to find the closest unit of the correct type.
+
+        **Role required:** system_admin only
+
+        **Auto-dispatch logic:**
+        1. Determines responder type from `incident_type`
+        2. Calls dispatch-service to get all available vehicles of that type
+        3. Calculates distance to each vehicle using Haversine formula
+        4. Assigns the nearest one and publishes RabbitMQ `incident.created` + `unit.dispatched` events
+      tags: [Incidents]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateIncidentRequest'
+            example:
+              citizen_name: Jane Doe
+              citizen_phone: "555-0100"
+              incident_type: fire
+              latitude: 5.6037
+              longitude: -0.1870
+              notes: Fire on second floor
+      responses:
+        '201':
+          description: Incident created (with or without unit assignment)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreateIncidentResponse'
+              examples:
+                dispatched:
+                  summary: Unit found and dispatched
+                  value:
+                    incidentId: INC-2026-4821
+                    status: dispatched
+                    assignedUnit:
+                      type: fire
+                      id: VEH-0042
+                      name: STATION-01
+                      distanceKm: "2.45"
+                    dispatchedAt: "2026-03-27T10:15:03.000Z"
+                no_unit:
+                  summary: No available unit
+                  value:
+                    incidentId: INC-2026-4821
+                    status: created
+                    message: Incident logged. No available unit found at this time.
+        '400':
+          description: Missing required fields
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                message: citizen_name, incident_type, latitude and longitude are required
+        '401':
+          description: Missing or invalid JWT
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Insufficient role (system_admin required)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+    get:
+      summary: List all incidents
+      description: |
+        Returns all incidents. Results are automatically filtered by the caller's role:
+        - **system_admin** — sees all incidents
+        - **police_admin** — sees only `crime` type incidents
+        - **fire_admin** — sees only `fire` type incidents
+        - **hospital_admin / ambulance_driver** — sees only `medical emergency` and `accident` incidents
+
+        Supports optional query filters.
+      tags: [Incidents]
+      parameters:
+        - name: status
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [created, dispatched, in_progress, resolved]
+          description: Filter by incident status
+        - name: incident_type
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Filter by incident type (ignored if role filter applies)
+      responses:
+        '200':
+          description: Array of incidents
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Incident'
+        '401':
+          description: Missing or invalid JWT
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /incidents/open:
+    get:
+      summary: List open (unresolved) incidents
+      description: |
+        Returns all incidents where status is NOT `resolved`. Role-based filtering applies
+        exactly as in `GET /incidents`.
+      tags: [Incidents]
+      responses:
+        '200':
+          description: Array of open incidents
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Incident'
+        '401':
+          description: Missing or invalid JWT
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /incidents/{id}:
+    get:
+      summary: Get a single incident by database ID
+      description: Returns the full incident record. All authenticated roles can access this endpoint.
+      tags: [Incidents]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+          description: Database primary key of the incident
+          example: 1
+      responses:
+        '200':
+          description: The incident record
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Incident'
+        '401':
+          description: Missing or invalid JWT
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Incident not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                message: Incident not found
+        '500':
+          description: Server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /incidents/{id}/status:
+    put:
+      summary: Update incident status
+      description: |
+        Updates the status of an incident. When set to `resolved`:
+        - Sets `resolved_at` timestamp
+        - Publishes `incident.resolved` RabbitMQ event (dispatch service will free the assigned vehicle)
+
+        **Roles allowed:** system_admin, police_admin, fire_admin, hospital_admin
+
+        Non-system_admins can only update incidents of their own type.
+      tags: [Incidents]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+          description: Database primary key of the incident
+          example: 1
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateStatusRequest'
+            example:
+              status: resolved
+      responses:
+        '200':
+          description: Status updated successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: Status updated
+                  incidentId:
+                    type: string
+                    example: "1"
+                  status:
+                    type: string
+                    example: resolved
+        '400':
+          description: Invalid status value
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                message: "Status must be one of: created, dispatched, in_progress, resolved"
+        '401':
+          description: Missing or invalid JWT
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Role not permitted to update this incident type
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                message: You are not authorized to update this incident type
+        '404':
+          description: Incident not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /incidents/{id}/assign:
+    put:
+      summary: Manually assign a unit to an incident
+      description: |
+        Manually overrides the auto-assigned unit. Sets status to `dispatched` and
+        publishes an `incident.created` RabbitMQ event so the dispatch service marks
+        the vehicle as dispatched.
+
+        **Role required:** system_admin only
+      tags: [Incidents]
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+          description: Database primary key of the incident
+          example: 1
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AssignUnitRequest'
+            example:
+              assigned_unit_id: VEH-0042
+              assigned_unit_type: fire
+      responses:
+        '200':
+          description: Unit assigned
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: Unit assigned
+                  incidentId:
+                    type: string
+                    example: "1"
+                  assigned_unit_id:
+                    type: string
+                    example: VEH-0042
+                  status:
+                    type: string
+                    example: dispatched
+        '401':
+          description: Missing or invalid JWT
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Insufficient role (system_admin required)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Incident not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /health:
+    get:
+      summary: Health check
+      description: Returns service status. No authentication required.
+      tags: [Health]
+      security: []
+      responses:
+        '200':
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ok
+                  service:
+                    type: string
+                    example: incident-service
+                  timestamp:
+                    type: string
+                    format: date-time
+                    example: "2026-03-27T10:00:00.000Z"
