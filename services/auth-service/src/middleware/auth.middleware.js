@@ -11,7 +11,7 @@ const verifyToken = (req, res, next) => {
   const token = authHeader.split(' ')[1];
 
   try {
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    const decoded = jwt.verify(token, process.env.JWT_SECRET, { clockTolerance: 30 });
     req.user = decoded; // { userId, email, role }
     next();
   } catch (error) {
